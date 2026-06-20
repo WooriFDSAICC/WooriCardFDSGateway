@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package woori.fds.v1;
+
+// gRPC 스텁 — Rule Engine / MLOps 배치 파이프라인 고처리량 연동 확장 포인트
+service FdsScoringService {
+  rpc ScoreTransaction (FdsScoreRequest) returns (FdsScoreResponse);
+}
+
+message FdsScoreRequest {
+  string session_id = 1;
+  string user_id = 2;
+  string txn_type = 3;
+  map<string, string> features = 4;
+}
+
+message FdsScoreResponse {
+  string status = 1;
+  int32 fds_score = 2;
+  string fds_flag = 3;
+  repeated string matched_rules = 4;
+}
