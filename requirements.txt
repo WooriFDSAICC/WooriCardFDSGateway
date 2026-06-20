@@ -1,0 +1,13 @@
+fastapi==0.115.12
+uvicorn[standard]==0.34.0
+pydantic==2.11.3
+pydantic-settings==2.8.1
+redis==5.2.1
+httpx==0.28.1
+python-dotenv==1.1.0
+grpcio==1.71.0
+grpcio-tools==1.71.0
+numpy>=1.26.4,<3
+prometheus-fastapi-instrumentator==7.1.0
+slowapi==0.1.9
+aiokafka==0.12.0
