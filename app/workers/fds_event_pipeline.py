@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Dict, Optional
@@ -8,10 +9,19 @@ import httpx
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 
 from app.config import settings
+from app.constants.integration_contract import CALL_DIRECTION_INBOUND, EVENT_AGENT_ESCALATION, SCHEMA_VERSION
 from app.constants.kafka_constants import KafkaConstants
+from app.metrics import (
+    APPLICATION,
+    fds_kafka_consumer_lag,
+    fds_kafka_dlq_published_total,
+    fds_kafka_events_processed_total,
+    fds_kafka_scores_published_total,
+)
 from app.models.fds_models import FdsScoreRequest
 from app.services.scoring.fds_scoring_pipeline import FdsScoringPipeline
-from app.workers.event_mapper import EventMapper
+from app.utils.log_context import bind_event_context, clear_event_context
+from app.workers.event_mapper import EventMapper, EventParseError
 from app.workers.feature_store_sync import FeatureStoreSyncService
 from app.workers.rule_evaluator import RuleEvaluator
 
@@ -35,6 +45,7 @@ class FdsEventPipelineWorker:
         self._http: Optional[httpx.AsyncClient] = None
         self._stt_counters: Dict[str, int] = {}
         self._running = False
+        self._lag_task: asyncio.Task | None = None
 
     async def startup(self) -> None:
         await self._feature_store.startup()
@@ -56,6 +67,7 @@ class FdsEventPipelineWorker:
         await self._consumer.start()
         await self._producer.start()
         self._running = True
+        self._lag_task = asyncio.create_task(self._report_lag_loop())
 
         logger.info(
             "[FdsEventPipeline] Started events=%s scores=%s actions=%s dlq=%s group=%s",
@@ -68,6 +80,13 @@ class FdsEventPipelineWorker:
 
     async def shutdown(self) -> None:
         self._running = False
+        if self._lag_task:
+            self._lag_task.cancel()
+            try:
+                await self._lag_task
+            except asyncio.CancelledError:
+                pass
+            self._lag_task = None
         if self._consumer:
             await self._consumer.stop()
             self._consumer = None
@@ -88,14 +107,38 @@ class FdsEventPipelineWorker:
                 break
             try:
                 await self._process_message(msg.value, msg.key)
+            except EventParseError as exc:
+                logger.warning("[FdsEventPipeline] Parse error: %s", exc)
+                await self._publish_dlq(msg.value, str(exc))
             except Exception as exc:
                 logger.exception("[FdsEventPipeline] Message processing failed")
                 await self._publish_dlq(msg.value, str(exc))
 
     async def _process_message(self, raw: str, key: bytes | None) -> None:
         event = EventMapper.parse_event(raw)
-        session_id = event.get("sessionId") or (key.decode("utf-8") if key else "unknown")
+        session_id = event.get("sessionId") or "unknown"
+        bind_event_context(session_id, event.get("callDirection"))
+        try:
+            await self._handle_parsed_event(event, key, raw)
+        finally:
+            clear_event_context()
+
+    async def _handle_parsed_event(self, event: Dict[str, Any], key: bytes | None, raw: str) -> None:
+        key_direction, key_session_id = EventMapper.parse_kafka_key(key)
+        session_id = event.get("sessionId") or key_session_id or "unknown"
+
+        if key_direction and event.get("callDirection"):
+            body_direction = (event.get("callDirection") or "").upper()
+            if key_direction != body_direction:
+                logger.warning(
+                    "[FdsEventPipeline] Kafka key/body direction mismatch key=%s body=%s session=%s",
+                    key_direction,
+                    body_direction,
+                    session_id,
+                )
+
         event_type = (event.get("eventType") or "").upper()
+        self._record_event(event)
 
         if event_type == KafkaConstants.EVENT_SESSION_ENDED:
             entity_key = EventMapper.entity_key(event)
@@ -104,6 +147,14 @@ class FdsEventPipelineWorker:
                 self._stt_counters.pop(entity_key, None)
             logger.info("[FdsEventPipeline] Session ended session=%s entity=%s", session_id, entity_key)
             return
+
+        if event_type == EVENT_AGENT_ESCALATION:
+            logger.warning(
+                "[FdsEventPipeline] Agent escalation session=%s direction=%s campaign=%s",
+                session_id,
+                event.get("callDirection"),
+                event.get("campaignId"),
+            )
 
         entity_key = await self._feature_store.sync_from_event(event)
         if not entity_key:
@@ -121,8 +172,10 @@ class FdsEventPipelineWorker:
         score_result = await self._score_in_process(score_request_body)
 
         score_payload = {
-            "schemaVersion": KafkaConstants.SCHEMA_VERSION,
+            "schemaVersion": SCHEMA_VERSION,
             "sessionId": session_id,
+            "callDirection": event.get("callDirection"),
+            "campaignId": event.get("campaignId"),
             "entityKey": entity_key,
             "sourceEventType": event.get("eventType"),
             "scoringResult": score_result,
@@ -155,20 +208,22 @@ class FdsEventPipelineWorker:
             key=session_id.encode("utf-8"),
             value=payload,
         )
+        if topic == settings.kafka_scores_topic:
+            fds_kafka_scores_published_total.labels(application=APPLICATION).inc()
         logger.info("[FdsEventPipeline] Published topic=%s session=%s", topic, session_id)
 
     async def _publish_dlq(self, raw: str, error: str) -> None:
         if not settings.kafka_dlq_enabled or self._producer is None:
             return
         try:
-            original = EventMapper.parse_event(raw)
+            original = json.loads(raw)
             session_id = original.get("sessionId", "unknown")
         except Exception:
             session_id = "unknown"
             original = {"raw": raw}
 
         payload = {
-            "schemaVersion": KafkaConstants.SCHEMA_VERSION,
+            "schemaVersion": SCHEMA_VERSION,
             "sessionId": session_id,
             "error": error,
             "originalEvent": original,
@@ -178,7 +233,45 @@ class FdsEventPipelineWorker:
             key=session_id.encode("utf-8"),
             value=payload,
         )
+        fds_kafka_dlq_published_total.labels(application=APPLICATION).inc()
         logger.warning("[FdsEventPipeline] Published DLQ session=%s error=%s", session_id, error)
+
+    async def _report_lag_loop(self) -> None:
+        while self._running:
+            try:
+                await self._update_consumer_lag()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("[FdsEventPipeline] Lag report failed: %s", exc)
+            await asyncio.sleep(15)
+
+    async def _update_consumer_lag(self) -> None:
+        if self._consumer is None:
+            return
+        partitions = self._consumer.assignment()
+        if not partitions:
+            return
+        end_offsets = await self._consumer.end_offsets(partitions)
+        total_lag = 0
+        for partition in partitions:
+            position = await self._consumer.position(partition)
+            end = end_offsets.get(partition, 0)
+            total_lag += max(0, end - position)
+        fds_kafka_consumer_lag.labels(
+            application=APPLICATION,
+            topic=settings.kafka_events_topic,
+        ).set(total_lag)
+
+    @staticmethod
+    def _record_event(event: Dict[str, Any]) -> None:
+        event_type = (event.get("eventType") or "UNKNOWN").upper()
+        direction = (event.get("callDirection") or CALL_DIRECTION_INBOUND).upper()
+        fds_kafka_events_processed_total.labels(
+            event_type=event_type,
+            call_direction=direction,
+            application=APPLICATION,
+        ).inc()
 
     async def _send_alert_webhook(self, action_result: Dict[str, Any]) -> None:
         if not self._http or not settings.alert_webhook_url:
