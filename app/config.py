@@ -1,5 +1,11 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.constants.integration_contract import (
+    TOPIC_FDS_ACTIONS,
+    TOPIC_FDS_DLQ,
+    TOPIC_FDS_EVENTS,
+    TOPIC_FDS_SCORES,
+)
 from app.constants.kafka_constants import KafkaConstants
 from app.constants.schema_constants import FeatureStorePolicy
 from app.constants.scoring_constants import ScoringConstants
@@ -48,9 +54,9 @@ class Settings(BaseSettings):
     kafka_worker_enabled: bool = True
     kafka_bootstrap_servers: str = KafkaConstants.DEFAULT_BOOTSTRAP
     kafka_consumer_group: str = KafkaConstants.CONSUMER_GROUP
-    kafka_events_topic: str = KafkaConstants.TOPIC_FDS_EVENTS
-    kafka_scores_topic: str = KafkaConstants.TOPIC_FDS_SCORES
-    kafka_actions_topic: str = KafkaConstants.TOPIC_FDS_ACTIONS
+    kafka_events_topic: str = TOPIC_FDS_EVENTS
+    kafka_scores_topic: str = TOPIC_FDS_SCORES
+    kafka_actions_topic: str = TOPIC_FDS_ACTIONS
 
     score_on_stt_every_n: int = 0
     block_score_threshold: int = 90
@@ -62,7 +68,7 @@ class Settings(BaseSettings):
     triton_startup_check: bool = True
 
     kafka_dlq_enabled: bool = True
-    kafka_dlq_topic: str = KafkaConstants.TOPIC_FDS_DLQ
+    kafka_dlq_topic: str = TOPIC_FDS_DLQ
 
 
 settings = Settings()
