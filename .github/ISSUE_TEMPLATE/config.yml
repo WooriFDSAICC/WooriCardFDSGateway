@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: FDS Gateway 실행 가이드
+    url: https://github.com/WooriFDSAICC/WooriCardFDSGateway/blob/main/docs/RUNNING.md
+    about: Docker·Kafka·Swagger 실행 방법
