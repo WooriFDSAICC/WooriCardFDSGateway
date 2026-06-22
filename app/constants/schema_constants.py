@@ -1,16 +1,25 @@
 from dataclasses import dataclass
 
 
+from app.constants.integration_contract import (
+    FEATURE_STORE_KEY_PREFIX,
+    SCHEMA_VERSION,
+    TOPIC_FDS_ACTIONS,
+    TOPIC_FDS_EVENTS,
+    TOPIC_FDS_SCORES,
+)
+
+
 @dataclass(frozen=True)
 class SchemaConstants:
     """Kafka / API 스키마 버전 관리."""
 
-    VERSION: str = "1.0"
+    VERSION: str = SCHEMA_VERSION
     HEADER_SCHEMA_VERSION: str = "X-Schema-Version"
 
-    EVENTS_TOPIC: str = "wooricard-fds-events"
-    SCORES_TOPIC: str = "wooricard-fds-scores"
-    ACTIONS_TOPIC: str = "wooricard-fds-actions"
+    EVENTS_TOPIC: str = TOPIC_FDS_EVENTS
+    SCORES_TOPIC: str = TOPIC_FDS_SCORES
+    ACTIONS_TOPIC: str = TOPIC_FDS_ACTIONS
 
 
 @dataclass(frozen=True)
@@ -22,7 +31,7 @@ class FeatureStorePolicy:
 
     PRIMARY_KEY_FIELD: str = "user_id"
     FALLBACK_KEY_FIELD: str = "session_id"
-    REDIS_KEY_PREFIX: str = "fds:feature:"
+    REDIS_KEY_PREFIX: str = FEATURE_STORE_KEY_PREFIX
     TTL_SECONDS: int = 3600
 
 
