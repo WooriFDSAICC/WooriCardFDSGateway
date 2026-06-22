@@ -6,7 +6,8 @@ from typing import Any, Dict, Optional
 import redis.asyncio as aioredis
 
 from app.config import settings
-from app.constants.kafka_constants import WorkerFeatureStoreConstants
+from app.constants.integration_contract import CALL_DIRECTION_INBOUND
+from app.constants.kafka_constants import SessionRedisConstants, WorkerFeatureStoreConstants
 from app.workers.event_mapper import EventMapper
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,9 @@ class FeatureStoreSyncService:
         if (event.get("fdsFlag") or "").upper() == "CRITICAL":
             malicious_app = 1
 
+        call_direction = (event.get("callDirection") or CALL_DIRECTION_INBOUND).upper()
+        campaign_id = event.get("campaignId") or ""
+
         mapping = {
             WorkerFeatureStoreConstants.FIELD_STT_KEYWORD_COUNT: str(new_count),
             WorkerFeatureStoreConstants.FIELD_MALICIOUS_APP_ACTIVE: str(malicious_app),
@@ -65,18 +69,39 @@ class FeatureStoreSyncService:
                     existing.get(WorkerFeatureStoreConstants.FIELD_TRANSFER_SUM_30M, 0),
                 )
             ),
+            WorkerFeatureStoreConstants.FIELD_CALL_DIRECTION: call_direction,
+            WorkerFeatureStoreConstants.FIELD_CAMPAIGN_ID: campaign_id,
         }
 
         await self._redis.hset(redis_key, mapping=mapping)
         await self._redis.expire(redis_key, settings.redis_feature_ttl_seconds)
 
+        session_key = EventMapper.session_registry_key(event)
+        if session_key:
+            await self._enrich_session_hash(session_key, event)
+
         logger.info(
-            "[FeatureStoreSync] entity=%s stt_keywords=%d malicious_app=%d",
+            "[FeatureStoreSync] entity=%s direction=%s stt_keywords=%d malicious_app=%d",
             entity_key,
+            call_direction,
             new_count,
             malicious_app,
         )
         return entity_key
+
+    async def _enrich_session_hash(self, session_key: str, event: Dict[str, Any]) -> None:
+        if self._redis is None:
+            return
+        metadata = event.get("metadata") or {}
+        mapping = {
+            SessionRedisConstants.FIELD_LAST_EVENT: event.get("eventType") or "",
+            SessionRedisConstants.FIELD_LAST_STT_TEXT: event.get("sttText") or "",
+            SessionRedisConstants.FIELD_FDS_FLAG: event.get("fdsFlag") or "",
+        }
+        final_status = metadata.get("finalStatus")
+        if final_status:
+            mapping[SessionRedisConstants.FIELD_STATUS] = str(final_status)
+        await self._redis.hset(session_key, mapping=mapping)
 
     async def finalize_session(self, entity_key: str, event: Dict[str, Any]) -> None:
         """통화 종료 피드백 — Feature Store 세션 상태 기록 및 TTL 단축."""
@@ -96,7 +121,16 @@ class FeatureStoreSyncService:
 
         await self._redis.hset(redis_key, mapping=mapping)
         await self._redis.expire(redis_key, WorkerFeatureStoreConstants.SESSION_END_TTL_SECONDS)
-        logger.info("[FeatureStoreSync] Session finalized entity=%s status=%s", entity_key, mapping.get("session_status"))
+
+        session_key = EventMapper.session_registry_key(event)
+        if session_key:
+            await self._enrich_session_hash(session_key, event)
+
+        logger.info(
+            "[FeatureStoreSync] Session finalized entity=%s status=%s",
+            entity_key,
+            mapping.get(WorkerFeatureStoreConstants.FIELD_SESSION_STATUS),
+        )
 
     async def get_context_features(self, entity_key: str) -> Dict[str, Any]:
         if self._redis is None:
@@ -118,4 +152,17 @@ class FeatureStoreSyncService:
             WorkerFeatureStoreConstants.FIELD_LAST_STT_TEXT: stored.get(
                 WorkerFeatureStoreConstants.FIELD_LAST_STT_TEXT, ""
             ),
+            WorkerFeatureStoreConstants.FIELD_CALL_DIRECTION: stored.get(
+                WorkerFeatureStoreConstants.FIELD_CALL_DIRECTION, CALL_DIRECTION_INBOUND
+            ),
+            WorkerFeatureStoreConstants.FIELD_CAMPAIGN_ID: stored.get(
+                WorkerFeatureStoreConstants.FIELD_CAMPAIGN_ID, ""
+            ),
         }
+
+    async def get_session_state(self, call_direction: str, session_id: str) -> Dict[str, str]:
+        """Relay 세션 Hash 조회 — wooricard:session:{direction}:{sessionId}."""
+        if self._redis is None:
+            return {}
+        key = f"{SessionRedisConstants.KEY_PREFIX}{call_direction.lower()}:{session_id}"
+        return await self._redis.hgetall(key)
