@@ -1,0 +1,32 @@
+name: 개발 이슈
+description: 오늘의 개발 이슈·기능 작업을 기록합니다
+title: "[ FDS ] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        <!-- 제목은 [ 페이지명 ] 내용 으로 작성합니다 -->
+        <!-- ex) [ FDS ] Kafka FDS 이벤트 파이프라인 -->
+        <!-- 대괄호 안에 띄어쓰기 있어용!!!!!!!! -->
+        <!-- 구현 완료 시 캡처도 띄어주세욤!! -->
+  - type: textarea
+    id: feature
+    attributes:
+      label: "💚 어떤 기능인가요?"
+      description: 구현하려는 기능·배경·연동 범위를 적어주세요.
+      placeholder: 예) fds-events → 스코어링 → fds-scores → fds-actions Kafka 파이프라인
+    validations:
+      required: true
+  - type: textarea
+    id: todos
+    attributes:
+      label: "✅ To Dos"
+      description: 체크리스트 형식으로 작성해주세요.
+      value: |
+        - [ ]
+        - [ ]
+        - [ ]
+    validations:
+      required: true
