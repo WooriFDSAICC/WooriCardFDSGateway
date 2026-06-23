@@ -1,30 +1,30 @@
-# WooriCardFDSGateway ???�행 가?�드
+# WooriCardFDSGateway — 실행 가이드
 
-FastAPI 기반 **FDS Gateway**?�니?? REST/gRPC FDS ?�코?�링 API?� Kafka ?�벤???�커(`wooricard-fds-events` consume ??scores/actions 발행)�??�공?�니??
+FastAPI 기반 **FDS Gateway**입니다. REST/gRPC FDS 스코어링 API와 Kafka 이벤트 워커(`wooricard-fds-events` consume → scores/actions 발행)를 제공합니다.
 
-## ?�전 ?�구?�항
+## 사전 요구사항
 
-| ??�� | 버전 |
+| 항목 | 버전 |
 |------|------|
 | Python | 3.12 |
 | Redis | 7.x |
-| Kafka | 3.x (?�커 ?�용 ?? |
-| Triton (?�는 Mock) | HTTP `:8001` ??FDS 모델 `fds_lgbm` |
+| Kafka | 3.x (워커 사용 시) |
+| Triton (또는 Mock) | HTTP `:8001` — FDS 모델 `fds_lgbm` |
 
 ---
 
-## 1. Docker�??�행
+## 1. Docker로 실행
 
-### ?�체 ?�택 (Relay compose ?�함)
+### 전체 스택 (Relay compose 포함)
 
 ```powershell
 cd MiddleWare\WooriCardCallBotRelayServer
 docker compose up --build fds-gateway
 ```
 
-?�존: `redis`, `kafka`, `triton`??compose?�서 ?�께 기동?�니??
+의존: `redis`, `kafka`, `triton`은 compose에서 함께 기동됩니다.
 
-### Gateway ?��?지�?
+### Gateway 이미지만
 
 ```powershell
 cd MiddleWare\WooriCardFDSGateway
@@ -38,7 +38,7 @@ docker run --rm -p 8010:8010 `
 
 ---
 
-## 2. 로컬 개발 ?�행
+## 2. 로컬 개발 실행
 
 ```powershell
 cd MiddleWare\WooriCardFDSGateway
@@ -47,18 +47,18 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-Redis·Kafka·Triton Mock??로컬?�서 ???�어???�니?? (Relay compose??`redis`/`kafka`/`triton`�??�워???�니??)
+Redis·Kafka·Triton Mock을 로컬에서 먼저 띄워야 합니다. (Relay compose의 `redis`/`kafka`/`triton`만 띄워도 됩니다)
 
 ```powershell
 cd MiddleWare\WooriCardCallBotRelayServer
 docker compose up -d redis kafka triton
 ```
 
-?�경 변???�시:
+환경 변수 예시:
 
 ```powershell
 $env:REDIS_HOST = "localhost"
-$env:REDIS_PORT = "6379"
+$env:REDIS_PORT = "6380"
 $env:KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
 $env:KAFKA_WORKER_ENABLED = "true"
 $env:TRITON_HTTP_URL = "http://localhost:8001"
@@ -67,18 +67,20 @@ uvicorn run:app --host 0.0.0.0 --port 8010 --reload
 
 ---
 
-## 3. API ?�드?�인??
+## 3. API 엔드포인트
 
-| 경로 | ?�명 |
+| 경로 | 설명 |
 |------|------|
-| `GET /health` | ?�스체크 (`triton_ready`, `kafka_fds_pipeline` ?? |
-| `GET /metrics` | Prometheus 메트�?|
-| `POST /api/v1/fds/score` | FDS ?�코?�링 REST API |
-| Internal ?�우??| ?��? Feature Store API (`app/routers/internal.py`) |
+| `GET /health` | 헬스체크 (`triton_ready`, `kafka_fds_pipeline` 등) |
+| `GET /metrics` | Prometheus 메트릭 |
+| `POST /api/v1/fds/score` | FDS 스코어링 REST API |
+| Internal 라우트 | 내부 Feature Store API (`app/routers/internal.py`) |
 
-기본 ?�트: **8010**
+기본 포트: **8010**
 
-gRPC (?�택):
+Swagger UI: `http://localhost:8010/docs`
+
+gRPC (선택):
 
 ```powershell
 $env:GRPC_ENABLED = "true"
@@ -87,20 +89,20 @@ $env:GRPC_PORT = "50051"
 
 ---
 
-## 4. Kafka ?�커
+## 4. Kafka 워커
 
-`KAFKA_WORKER_ENABLED=true`(기본)?�면 ??기동 ??백그?�운?�에???�음 ?�이?�라?�이 ?�작?�니??
+`KAFKA_WORKER_ENABLED=true`(기본)이면 앱 기동 시 백그라운드에서 다음 파이프라인이 동작합니다.
 
 ```
-wooricard-fds-events ??Feature Store(Redis) ???�코?�링
-  ??wooricard-fds-scores ??Rule ?��? ??wooricard-fds-actions
+wooricard-fds-events → Feature Store(Redis) → 스코어링
+  → wooricard-fds-scores → Rule 판정 → wooricard-fds-actions
 ```
 
-?�싱 ?�패 ?? `wooricard-fds-events-dlq`
+파싱 실패 시: `wooricard-fds-events-dlq`
 
-### 주요 Kafka ?�경 변??
+### 주요 Kafka 환경 변수
 
-| 변??| 기본�?|
+| 변수 | 기본값 |
 |------|--------|
 | `KAFKA_BOOTSTRAP_SERVERS` | localhost:9092 |
 | `KAFKA_EVENTS_TOPIC` | wooricard-fds-events |
@@ -112,17 +114,17 @@ wooricard-fds-events ??Feature Store(Redis) ???�코?�링
 
 ---
 
-## 5. ?�경 변??(?�체)
+## 5. 환경 변수 (전체)
 
-`.env` ?�는 ?�에???�정 (`app/config.py`).
+`.env` 또는 셸에서 설정 (`app/config.py`).
 
-| 변??| 기본�?| ?�명 |
+| 변수 | 기본값 | 설명 |
 |------|--------|------|
 | `TRITON_HTTP_URL` | http://localhost:8001 | Triton URL |
-| `TRITON_FDS_MODEL` | fds_lgbm | FDS 모델�?|
-| `TRITON_STARTUP_CHECK` | true | 기동 ??ready 검??|
-| `API_KEY_ENABLED` | false | REST API ??|
-| `INTERNAL_API_KEY` | woori-internal-dev-key | ?��? API ??|
+| `TRITON_FDS_MODEL` | fds_lgbm | FDS 모델명 |
+| `TRITON_STARTUP_CHECK` | true | 기동 시 ready 검사 |
+| `API_KEY_ENABLED` | false | REST API 키 |
+| `INTERNAL_API_KEY` | woori-internal-dev-key | 내부 API 키 |
 | `RATE_LIMIT_ENABLED` | true | Rate limit |
 | `METRICS_ENABLED` | true | Prometheus |
 | `OTEL_ENABLED` | false | OpenTelemetry |
@@ -130,22 +132,22 @@ wooricard-fds-events ??Feature Store(Redis) ???�코?�링
 
 ---
 
-## 6. ?�작 ?�인
+## 6. 동작 확인
 
 ```powershell
 curl http://localhost:8010/health
 curl http://localhost:8010/metrics
 ```
 
-Kafka ?�벤?��? consume?�는지??Relay 경유 ?�화 ?�는 Relay가 `wooricard-fds-events`??발행????메트�?`fds_kafka_events_processed_total`�??�인?�니??
+Kafka 이벤트가 consume되는지는 Relay 경유 통화 또는 Relay가 `wooricard-fds-events`에 발행한 뒤 메트릭 `fds_kafka_events_processed_total`로 확인합니다.
 
-### ?�위 ?�스??
+### 단위 테스트
 
 ```powershell
 pytest
 ```
 
-### 계약 ?�기??
+### 계약 동기화
 
 ```powershell
 python ..\scripts\sync_integration_contracts.py
@@ -153,6 +155,6 @@ python ..\scripts\sync_integration_contracts.py
 
 ---
 
-## 7. Relay ?�동
+## 7. Relay 연동
 
-Relay가 `wooricard-fds-events`??`callDirection`, `campaignId` ?�함 FdsEvent v1.0??발행?�면 FDS Gateway ?�커가 consume?�니?? Redis ?�션 ?? `wooricard:session:{inbound|outbound}:{sessionId}`.
+Relay가 `wooricard-fds-events`에 `callDirection`, `campaignId` 포함 FdsEvent v1.0을 발행하면 FDS Gateway 워커가 consume합니다. Redis 세션 키: `wooricard:session:{inbound|outbound}:{sessionId}`.
